@@ -17,6 +17,7 @@ import {
   SidebarMenuSkeleton,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
+import { CreateWorkspaceDialog } from "@/components/workspaces/create-workspace-dialog";
 
 export function AppSidebar() {
   const pathname = usePathname();
@@ -34,10 +35,12 @@ export function AppSidebar() {
             <p className="text-muted-foreground text-xs">Workspace Manager</p>
           </div>
         </div>
-        <Button size="sm" className="w-full" type="button">
-          <Plus className="size-4" />
-          Criar Workspace
-        </Button>
+        <CreateWorkspaceDialog>
+          <Button size="sm" className="w-full" type="button">
+            <Plus className="size-4" />
+            Criar Workspace
+          </Button>
+        </CreateWorkspaceDialog>
       </SidebarHeader>
 
       <SidebarContent>
