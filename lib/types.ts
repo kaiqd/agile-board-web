@@ -51,6 +51,9 @@ export type UpdateProjectInput = Partial<CreateProjectInput>;
 export type CreateBoardInput = Pick<Board, "name">;
 export type UpdateBoardInput = Partial<CreateBoardInput>;
 
+export type CreateColumnInput = Pick<Column, "name">;
+export type UpdateColumnInput = Partial<CreateColumnInput>;
+
 export type CreateTaskInput = Pick<Task, "title"> & { description?: string };
 export type UpdateTaskInput = Partial<CreateTaskInput>;
 

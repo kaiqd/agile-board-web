@@ -1,16 +1,18 @@
 "use client";
 
-import { type FormEvent, useMemo, useRef, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { useParams } from "next/navigation";
+import { ChevronLeft, ChevronRight, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import type { Task } from "@/lib/types";
+import { useColumns, useCreateColumn, useReorderColumns } from "@/hooks/use-columns";
 import {
-  ChevronLeft,
-  ChevronRight,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  Trash2,
-} from "lucide-react";
-import type { Column, Task } from "@/lib/types";
+  useCreateTask,
+  useDeleteTask,
+  useMoveTask,
+  useTasksByColumns,
+  useUpdateTask,
+} from "@/hooks/use-tasks";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -47,80 +49,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-
-function buildInitialBoard(boardId: string): { columns: Column[]; tasks: Task[] } {
-  const now = new Date().toISOString();
-
-  const todoId = `${boardId}-todo`;
-  const inProgressId = `${boardId}-in-progress`;
-  const doneId = `${boardId}-done`;
-
-  return {
-    columns: [
-      {
-        id: todoId,
-        name: "To Do",
-        position: 0,
-        boardId,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: inProgressId,
-        name: "In Progress",
-        position: 1,
-        boardId,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: doneId,
-        name: "Done",
-        position: 2,
-        boardId,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
-    tasks: [
-      {
-        id: `${boardId}-task-1`,
-        title: "Definir escopo da sprint",
-        description: "Alinhar backlog e prioridades com o time.",
-        position: 0,
-        boardId,
-        columnId: todoId,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: `${boardId}-task-2`,
-        title: "Criar layout inicial do board",
-        description: null,
-        position: 0,
-        boardId,
-        columnId: inProgressId,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: `${boardId}-task-3`,
-        title: "Configurar providers globais",
-        description: "QueryProvider + Sidebar + Toaster.",
-        position: 0,
-        boardId,
-        columnId: doneId,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
-  };
-}
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface TaskDialogProps {
   columnId: string;
   initialTask?: Task;
-  onSave: (payload: { title: string; description: string | null }) => void;
+  onSave: (payload: { title: string; description: string | null }) => Promise<void>;
   children: React.ReactNode;
 }
 
@@ -129,6 +63,7 @@ function TaskDialog({ columnId, initialTask, onSave, children }: TaskDialogProps
   const [title, setTitle] = useState(initialTask?.title ?? "");
   const [description, setDescription] = useState(initialTask?.description ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
   function onOpenChange(next: boolean) {
     setOpen(next);
@@ -140,7 +75,7 @@ function TaskDialog({ columnId, initialTask, onSave, children }: TaskDialogProps
     }
   }
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const trimmedTitle = title.trim();
@@ -151,12 +86,16 @@ function TaskDialog({ columnId, initialTask, onSave, children }: TaskDialogProps
       return;
     }
 
-    onSave({
-      title: trimmedTitle,
-      description: trimmedDescription.length ? trimmedDescription : null,
-    });
-
-    setOpen(false);
+    setPending(true);
+    try {
+      await onSave({
+        title: trimmedTitle,
+        description: trimmedDescription.length ? trimmedDescription : null,
+      });
+      setOpen(false);
+    } finally {
+      setPending(false);
+    }
   }
 
   const isEditing = Boolean(initialTask);
@@ -207,7 +146,9 @@ function TaskDialog({ columnId, initialTask, onSave, children }: TaskDialogProps
           {error && <p className="text-destructive text-sm">{error}</p>}
 
           <DialogFooter>
-            <Button type="submit">{isEditing ? "Salvar" : "Criar"}</Button>
+            <Button type="submit" disabled={pending}>
+              {pending ? "Salvando..." : isEditing ? "Salvar" : "Criar"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -218,35 +159,33 @@ function TaskDialog({ columnId, initialTask, onSave, children }: TaskDialogProps
 export default function BoardPage() {
   const params = useParams<{ boardId: string }>();
   const boardId = params.boardId;
-  const nextIdRef = useRef(0);
 
-  const initialData = useMemo(() => buildInitialBoard(boardId), [boardId]);
-  const [columns, setColumns] = useState<Column[]>(initialData.columns);
-  const [tasks, setTasks] = useState<Task[]>(initialData.tasks);
+  const { data: columns = [], isLoading: isColumnsLoading } = useColumns(boardId);
+  const orderedColumns = [...columns].sort((a, b) => a.position - b.position);
+
+  const {
+    dataByColumn: tasksMap,
+    isLoading: isTasksLoading,
+    isFetching: isTasksFetching,
+  } = useTasksByColumns(orderedColumns.map((column) => column.id));
+
+  const createColumnMutation = useCreateColumn(boardId);
+  const reorderColumnsMutation = useReorderColumns(boardId);
+  const createTaskMutation = useCreateTask();
+  const updateTaskMutation = useUpdateTask();
+  const deleteTaskMutation = useDeleteTask();
+  const moveTaskMutation = useMoveTask();
 
   const [newColumnOpen, setNewColumnOpen] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
   const [newColumnError, setNewColumnError] = useState<string | null>(null);
-
-  const orderedColumns = [...columns].sort((a, b) => a.position - b.position);
-
-  function makeId(prefix: string) {
-    nextIdRef.current += 1;
-    return `${prefix}-${boardId}-${nextIdRef.current}`;
-  }
-
-  function tasksByColumn(columnId: string) {
-    return tasks
-      .filter((task) => task.columnId === columnId)
-      .sort((a, b) => a.position - b.position);
-  }
 
   function resetColumnDialog() {
     setNewColumnName("");
     setNewColumnError(null);
   }
 
-  function createColumn(event: FormEvent<HTMLFormElement>) {
+  async function createColumn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const trimmed = newColumnName.trim();
@@ -255,65 +194,63 @@ export default function BoardPage() {
       return;
     }
 
-    const now = new Date().toISOString();
-    const nextColumn: Column = {
-      id: makeId("column"),
-      name: trimmed,
-      position: orderedColumns.length,
-      boardId,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    setColumns((prev) => [...prev, nextColumn]);
-    setNewColumnOpen(false);
-    resetColumnDialog();
-  }
-
-  function addTask(columnId: string, payload: { title: string; description: string | null }) {
-    const now = new Date().toISOString();
-    const columnTasks = tasksByColumn(columnId);
-
-    const task: Task = {
-      id: makeId("task"),
-      title: payload.title,
-      description: payload.description,
-      position: columnTasks.length,
-      boardId,
-      columnId,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    setTasks((prev) => [...prev, task]);
-  }
-
-  function updateTask(taskId: string, payload: { title: string; description: string | null }) {
-    const now = new Date().toISOString();
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              title: payload.title,
-              description: payload.description,
-              updatedAt: now,
-            }
-          : task,
-      ),
-    );
-  }
-
-  function deleteTask(taskId: string) {
-    setTasks((prev) => prev.filter((task) => task.id !== taskId));
-  }
-
-  function moveTask(taskId: string, direction: -1 | 1) {
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) {
-      return;
+    try {
+      await createColumnMutation.mutateAsync({ name: trimmed });
+      toast.success("Coluna criada com sucesso.");
+      setNewColumnOpen(false);
+      resetColumnDialog();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro inesperado.";
+      toast.error(message);
     }
+  }
 
+  async function createTask(columnId: string, payload: { title: string; description: string | null }) {
+    try {
+      await createTaskMutation.mutateAsync({
+        columnId,
+        data: {
+          title: payload.title,
+          description: payload.description ?? undefined,
+        },
+      });
+      toast.success("Tarefa criada com sucesso.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro inesperado.";
+      toast.error(message);
+      throw err;
+    }
+  }
+
+  async function updateTask(task: Task, payload: { title: string; description: string | null }) {
+    try {
+      await updateTaskMutation.mutateAsync({
+        columnId: task.columnId,
+        id: task.id,
+        data: {
+          title: payload.title,
+          description: payload.description ?? undefined,
+        },
+      });
+      toast.success("Tarefa atualizada com sucesso.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro inesperado.";
+      toast.error(message);
+      throw err;
+    }
+  }
+
+  async function deleteTask(task: Task) {
+    try {
+      await deleteTaskMutation.mutateAsync({ columnId: task.columnId, id: task.id });
+      toast.success("Tarefa excluida.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro inesperado.";
+      toast.error(message);
+    }
+  }
+
+  async function moveTask(task: Task, direction: -1 | 1) {
     const columnIndex = orderedColumns.findIndex((column) => column.id === task.columnId);
     if (columnIndex < 0) {
       return;
@@ -324,22 +261,46 @@ export default function BoardPage() {
       return;
     }
 
-    const now = new Date().toISOString();
-    const targetColumnTasks = tasksByColumn(targetColumn.id);
+    const targetTasks = tasksMap[targetColumn.id] ?? [];
 
-    setTasks((prev) =>
-      prev.map((item) =>
-        item.id === taskId
-          ? {
-              ...item,
-              columnId: targetColumn.id,
-              position: targetColumnTasks.length,
-              updatedAt: now,
-            }
-          : item,
-      ),
-    );
+    try {
+      await moveTaskMutation.mutateAsync({
+        columnId: task.columnId,
+        id: task.id,
+        data: {
+          columnId: targetColumn.id,
+          position: targetTasks.length,
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro inesperado.";
+      toast.error(message);
+    }
   }
+
+  async function moveColumn(columnId: string, direction: -1 | 1) {
+    const index = orderedColumns.findIndex((column) => column.id === columnId);
+    const targetIndex = index + direction;
+
+    if (index < 0 || targetIndex < 0 || targetIndex >= orderedColumns.length) {
+      return;
+    }
+
+    const reordered = [...orderedColumns];
+    const [column] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, column);
+
+    try {
+      await reorderColumnsMutation.mutateAsync({
+        orderedIds: reordered.map((item) => item.id),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro inesperado.";
+      toast.error(message);
+    }
+  }
+
+  const loading = isColumnsLoading || isTasksLoading;
 
   return (
     <section className="space-y-6">
@@ -394,138 +355,191 @@ export default function BoardPage() {
               </div>
 
               <DialogFooter>
-                <Button type="submit">Criar coluna</Button>
+                <Button type="submit" disabled={createColumnMutation.isPending}>
+                  {createColumnMutation.isPending ? "Criando..." : "Criar coluna"}
+                </Button>
               </DialogFooter>
             </form>
           </DialogContent>
         </Dialog>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {orderedColumns.map((column, columnIndex) => {
-          const columnTasks = tasksByColumn(column.id);
+      {loading && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} className="h-96 rounded-xl" />
+          ))}
+        </div>
+      )}
 
-          return (
-            <Card key={column.id} className="gap-4">
-              <CardHeader className="pb-0">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">{column.name}</CardTitle>
-                  <Badge variant="secondary">{columnTasks.length}</Badge>
-                </div>
-              </CardHeader>
+      {!loading && orderedColumns.length === 0 && (
+        <div className="text-muted-foreground rounded-xl border border-dashed p-8 text-center">
+          Nenhuma coluna cadastrada para este board.
+        </div>
+      )}
 
-              <CardContent className="space-y-3">
-                <TaskDialog
-                  columnId={column.id}
-                  onSave={(payload) => addTask(column.id, payload)}
-                >
-                  <Button variant="outline" size="sm" className="w-full">
-                    <Plus className="size-4" />
-                    Nova Tarefa
-                  </Button>
-                </TaskDialog>
+      {!loading && orderedColumns.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {orderedColumns.map((column, columnIndex) => {
+            const columnTasks = tasksMap[column.id] ?? [];
 
-                <div className="space-y-2">
-                  {columnTasks.length === 0 && (
-                    <div className="text-muted-foreground rounded-md border border-dashed p-3 text-sm">
-                      Nenhuma tarefa nesta coluna.
+            return (
+              <Card key={column.id} className="gap-4">
+                <CardHeader className="pb-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-base">{column.name}</CardTitle>
+                      <Badge variant="secondary">{columnTasks.length}</Badge>
                     </div>
-                  )}
 
-                  {columnTasks.map((task) => (
-                    <div key={task.id} className="rounded-md border p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">{task.title}</p>
-                          {task.description && (
-                            <p className="text-muted-foreground mt-1 text-xs">
-                              {task.description}
-                            </p>
-                          )}
+                    <div className="flex items-center">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7"
+                        onClick={() => moveColumn(column.id, -1)}
+                        disabled={columnIndex === 0 || reorderColumnsMutation.isPending}
+                      >
+                        <ChevronLeft className="size-4" />
+                        <span className="sr-only">Mover coluna para esquerda</span>
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7"
+                        onClick={() => moveColumn(column.id, 1)}
+                        disabled={
+                          columnIndex === orderedColumns.length - 1 ||
+                          reorderColumnsMutation.isPending
+                        }
+                      >
+                        <ChevronRight className="size-4" />
+                        <span className="sr-only">Mover coluna para direita</span>
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="space-y-3">
+                  <TaskDialog
+                    columnId={column.id}
+                    onSave={(payload) => createTask(column.id, payload)}
+                  >
+                    <Button variant="outline" size="sm" className="w-full">
+                      <Plus className="size-4" />
+                      Nova Tarefa
+                    </Button>
+                  </TaskDialog>
+
+                  <div className="space-y-2">
+                    {columnTasks.length === 0 && (
+                      <div className="text-muted-foreground rounded-md border border-dashed p-3 text-sm">
+                        Nenhuma tarefa nesta coluna.
+                      </div>
+                    )}
+
+                    {columnTasks.map((task) => (
+                      <div key={task.id} className="rounded-md border p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">{task.title}</p>
+                            {task.description && (
+                              <p className="text-muted-foreground mt-1 text-xs">
+                                {task.description}
+                              </p>
+                            )}
+                          </div>
+
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button size="icon" variant="ghost" className="size-7">
+                                <MoreHorizontal className="size-4" />
+                                <span className="sr-only">Acoes da tarefa</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <TaskDialog
+                                columnId={task.columnId}
+                                initialTask={task}
+                                onSave={(payload) => updateTask(task, payload)}
+                              >
+                                <DropdownMenuItem onSelect={(event) => event.preventDefault()}>
+                                  <Pencil className="size-4" />
+                                  Editar
+                                </DropdownMenuItem>
+                              </TaskDialog>
+
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <DropdownMenuItem
+                                    variant="destructive"
+                                    onSelect={(event) => event.preventDefault()}
+                                  >
+                                    <Trash2 className="size-4" />
+                                    Excluir
+                                  </DropdownMenuItem>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Excluir tarefa?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      Essa acao remove a tarefa permanentemente.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      variant="destructive"
+                                      onClick={() => deleteTask(task)}
+                                    >
+                                      Excluir
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
 
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button size="icon" variant="ghost" className="size-7">
-                              <MoreHorizontal className="size-4" />
-                              <span className="sr-only">Acoes da tarefa</span>
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <TaskDialog
-                              columnId={task.columnId}
-                              initialTask={task}
-                              onSave={(payload) => updateTask(task.id, payload)}
-                            >
-                              <DropdownMenuItem onSelect={(event) => event.preventDefault()}>
-                                <Pencil className="size-4" />
-                                Editar
-                              </DropdownMenuItem>
-                            </TaskDialog>
+                        <div className="mt-3 flex items-center justify-between">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            onClick={() => moveTask(task, -1)}
+                            disabled={columnIndex === 0 || moveTaskMutation.isPending}
+                          >
+                            <ChevronLeft className="size-4" />
+                            <span className="sr-only">Mover para coluna anterior</span>
+                          </Button>
 
-                            <AlertDialog>
-                              <AlertDialogTrigger asChild>
-                                <DropdownMenuItem
-                                  variant="destructive"
-                                  onSelect={(event) => event.preventDefault()}
-                                >
-                                  <Trash2 className="size-4" />
-                                  Excluir
-                                </DropdownMenuItem>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>Excluir tarefa?</AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    Essa acao remove a tarefa permanentemente.
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    variant="destructive"
-                                    onClick={() => deleteTask(task.id)}
-                                  >
-                                    Excluir
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            onClick={() => moveTask(task, 1)}
+                            disabled={
+                              columnIndex === orderedColumns.length - 1 ||
+                              moveTaskMutation.isPending
+                            }
+                          >
+                            <ChevronRight className="size-4" />
+                            <span className="sr-only">Mover para proxima coluna</span>
+                          </Button>
+                        </div>
                       </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
-                      <div className="mt-3 flex items-center justify-between">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          onClick={() => moveTask(task.id, -1)}
-                          disabled={columnIndex === 0}
-                        >
-                          <ChevronLeft className="size-4" />
-                          <span className="sr-only">Mover para coluna anterior</span>
-                        </Button>
-
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          onClick={() => moveTask(task.id, 1)}
-                          disabled={columnIndex === orderedColumns.length - 1}
-                        >
-                          <ChevronRight className="size-4" />
-                          <span className="sr-only">Mover para proxima coluna</span>
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      {isTasksFetching && !loading && (
+        <p className="text-muted-foreground text-xs">Atualizando board...</p>
+      )}
     </section>
   );
 }
